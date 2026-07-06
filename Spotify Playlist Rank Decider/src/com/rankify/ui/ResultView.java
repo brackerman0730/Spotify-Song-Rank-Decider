@@ -9,9 +9,14 @@ import javafx.collections.FXCollections;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.Scene;
-import javafx.scene.control.*;
+import javafx.scene.control.Alert;
+import javafx.scene.control.Button;
+import javafx.scene.control.Label;
+import javafx.scene.control.TableColumn;
+import javafx.scene.control.TableView;
 import javafx.scene.control.cell.PropertyValueFactory;
 import javafx.scene.layout.HBox;
+import javafx.scene.layout.Priority;
 import javafx.scene.layout.VBox;
 import javafx.stage.FileChooser;
 import javafx.stage.Stage;
@@ -37,8 +42,8 @@ public final class ResultView {
     }
 
     public void show() {
-        Label header = new Label("Done — your ranking is ready 🎉");
-        header.setStyle("-fx-font-size: 22px; -fx-font-weight: bold;");
+        Label header = new Label("Your ranking is ready 🎉");
+        header.getStyleClass().add("label-header");
 
         int removedCount = ranker.removedIds().size();
         Label stats = new Label(String.format(
@@ -50,35 +55,37 @@ public final class ResultView {
                     ? String.format("  %d unknown song%s excluded.",
                                     removedCount, removedCount == 1 ? "" : "s")
                     : ""));
+        stats.getStyleClass().add("label-stats");
 
-        // Build a simple table view
         TableView<Row> table = new TableView<>();
         table.setItems(FXCollections.observableArrayList(toRows(ranking)));
-
         table.getColumns().addAll(
-                col("Rank",   "rank",   55),
-                col("Song",   "title",  240),
-                col("Artist", "artist", 180),
-                col("Album",  "album",  220)
+                col("#",       "rank",    55),
+                col("Song",    "title",   280),
+                col("Artist",  "artist",  200),
+                col("Album",   "album",   240)
         );
+        table.setPlaceholder(new Label("No songs ranked."));
 
-        Button export = new Button("Export ranking as CSV...");
+        Button export = primaryButton("Export as CSV");
+        Button back   = secondaryButton("Back to start");
         export.setOnAction(e -> exportCsv());
-
-        Button back = new Button("Back to start");
-        back.setOnAction(e -> new MainView(stage).show());
+        back.setOnAction  (e -> new MainView(stage).show());
 
         HBox actions = new HBox(15, export, back);
         actions.setAlignment(Pos.CENTER);
 
-        VBox root = new VBox(15, header, stats, table, actions);
-        root.setPadding(new Insets(25));
-        VBox.setVgrow(table, javafx.scene.layout.Priority.ALWAYS);
+        VBox root = new VBox(18, header, stats, table, actions);
+        root.setPadding(new Insets(30));
+        VBox.setVgrow(table, Priority.ALWAYS);
 
-        stage.setScene(new Scene(root, 820, 560));
+        Scene scene = new Scene(root, 900, 620);
+        Theme.apply(scene);
+        stage.setScene(scene);
         stage.setTitle("Rankify — Results");
     }
 
+    @SuppressWarnings("unchecked")
     private <T> TableColumn<Row, T> col(String name, String prop, double width) {
         TableColumn<Row, T> c = new TableColumn<>(name);
         c.setCellValueFactory(new PropertyValueFactory<>(prop));
@@ -105,13 +112,32 @@ public final class ResultView {
 
         try {
             new RankingCsvWriter().write(Paths.get(file.getAbsolutePath()), ranking);
-            new Alert(Alert.AlertType.INFORMATION, "Exported to " + file.getName()).showAndWait();
+            Alert a = new Alert(Alert.AlertType.INFORMATION, "Exported to " + file.getName());
+            Theme.apply(a.getDialogPane().getScene());
+            a.showAndWait();
         } catch (Exception ex) {
-            new Alert(Alert.AlertType.ERROR, "Export failed: " + ex.getMessage()).showAndWait();
+            Alert a = new Alert(Alert.AlertType.ERROR, "Export failed: " + ex.getMessage());
+            Theme.apply(a.getDialogPane().getScene());
+            a.showAndWait();
         }
     }
 
-    /** JavaBean used purely so TableView's PropertyValueFactory works cleanly. */
+    private Button primaryButton(String text) {
+        Button b = new Button(text);
+        b.getStyleClass().add("button-primary");
+        b.setPrefHeight(44);
+        b.setPrefWidth(180);
+        return b;
+    }
+    private Button secondaryButton(String text) {
+        Button b = new Button(text);
+        b.getStyleClass().add("button-secondary");
+        b.setPrefHeight(44);
+        b.setPrefWidth(180);
+        return b;
+    }
+
+    /** JavaBean row so TableView's PropertyValueFactory works cleanly. */
     public static class Row {
         private final int rank;
         private final String title, artist, album;

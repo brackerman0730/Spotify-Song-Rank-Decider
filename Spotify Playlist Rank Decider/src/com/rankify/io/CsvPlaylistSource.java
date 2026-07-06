@@ -14,14 +14,55 @@ import java.util.Map;
 
 /**
  * Parses standard comma-separated CSV exports produced by tools like
- * TuneMyMusic, Exportify, etc. The first row is expected to be a header
- * so we can map columns by name instead of position — this way the parser
- * survives most reordering or extra-column additions from converters.
+ * TuneMyMusic, Exportify, and Spotify's own library export.
  *
- * Handles quoted fields containing commas, escaped quotes ("") and
- * BOM-prefixed files.
+ * The first row is expected to be a header. We map columns by *aliases*
+ * rather than exact names, so files from different exporters "just work"
+ * without user configuration.
+ *
+ * Handles:
+ *   - Quoted fields containing commas ("Them Vs. You Vs. Me, Deluxe")
+ *   - Escaped quotes inside fields ("He said ""hi""")
+ *   - UTF-8 BOM at the start of the file
+ *   - Missing or reordered columns
  */
 public final class CsvPlaylistSource implements PlaylistSource {
+
+    // ------------------------------------------------------------------
+    //  Header aliases — first match wins. Case-insensitive.
+    // ------------------------------------------------------------------
+    private static final String[] TITLE_ALIASES = {
+            "Song", "Track name", "Track Name", "Title", "Name"
+    };
+    private static final String[] ARTIST_ALIASES = {
+            "Artist", "Artist name", "Artist Name",
+            "Artist name(s)", "Artist Name(s)", "Artists"
+    };
+    private static final String[] ALBUM_ALIASES = {
+            "Album", "Album Name", "Album name"
+    };
+    private static final String[] ALBUM_DATE_ALIASES = {
+            "Album Date", "Album Release Date", "Release Date"
+    };
+    private static final String[] ID_ALIASES = {
+            "Spotify Track Id", "Spotify - id", "Spotify ID",
+            "Track ID", "Track Id", "ID", "URI", "Track URI"
+    };
+    private static final String[] DURATION_ALIASES = {
+            "Duration", "Track Duration", "Length"
+    };
+    private static final String[] DURATION_MS_ALIASES = {
+            "Duration (ms)", "Track Duration (ms)", "Duration ms"
+    };
+    private static final String[] BPM_ALIASES        = { "BPM", "Tempo" };
+    private static final String[] POPULARITY_ALIASES = { "Popularity" };
+    private static final String[] ENERGY_ALIASES     = { "Energy" };
+    private static final String[] KEY_ALIASES        = { "Key" };
+    private static final String[] CAMELOT_ALIASES    = { "Camelot" };
+    private static final String[] GENRES_ALIASES     = { "Genres", "Genre" };
+    private static final String[] EXPLICIT_ALIASES   = { "Explicit" };
+
+    // ------------------------------------------------------------------
 
     @Override
     public Playlist load(String filePath) throws IOException {
@@ -40,7 +81,8 @@ public final class CsvPlaylistSource implements PlaylistSource {
         List<String> headers = parseCsvLine(headerLine);
         Map<String, Integer> col = new HashMap<>();
         for (int k = 0; k < headers.size(); k++) {
-            col.put(headers.get(k).trim(), k);
+            // Lower-case for case-insensitive matching.
+            col.put(headers.get(k).trim().toLowerCase(), k);
         }
 
         List<Song> songs = new ArrayList<>();
@@ -59,42 +101,52 @@ public final class CsvPlaylistSource implements PlaylistSource {
     // ------------------------------------------------------------------
 
     private Song buildSong(List<String> fields, Map<String, Integer> col, int lineNum) {
-        String title  = get(fields, col, "Song");
-        String artist = get(fields, col, "Artist");
-        String id     = get(fields, col, "Spotify Track Id");
+        String title  = firstMatch(fields, col, TITLE_ALIASES);
+        String artist = firstMatch(fields, col, ARTIST_ALIASES);
+        String id     = firstMatch(fields, col, ID_ALIASES);
 
-        // Fall back gracefully — a row with no title is likely a broken export.
-        if (title.isEmpty()) return null;
+        if (title.isEmpty()) return null;             // skip malformed rows
         if (id.isEmpty())    id = "row-" + lineNum;
         if (artist.isEmpty()) artist = "Unknown Artist";
+
+        // Handle either "3:28" style or millisecond durations.
+        int durationSecs = parseDuration(firstMatch(fields, col, DURATION_ALIASES));
+        if (durationSecs == 0) {
+            int ms = parseInt(firstMatch(fields, col, DURATION_MS_ALIASES));
+            durationSecs = ms / 1000;
+        }
 
         return Song.builder()
                 .id(id)
                 .title(title)
                 .artist(artist)
-                .album(get(fields, col, "Album"))
-                .albumDate(get(fields, col, "Album Date"))
-                .bpm(parseInt(get(fields, col, "BPM")))
-                .popularity(parseInt(get(fields, col, "Popularity")))
-                .energy(parseInt(get(fields, col, "Energy")))
-                .key(get(fields, col, "Key"))
-                .camelot(get(fields, col, "Camelot"))
-                .genres(get(fields, col, "Genres"))
-                .explicit(get(fields, col, "Explicit").equalsIgnoreCase("yes"))
-                .durationSeconds(parseDuration(get(fields, col, "Duration")))
+                .album(firstMatch(fields, col, ALBUM_ALIASES))
+                .albumDate(firstMatch(fields, col, ALBUM_DATE_ALIASES))
+                .durationSeconds(durationSecs)
+                .bpm(parseInt(firstMatch(fields, col, BPM_ALIASES)))
+                .popularity(parseInt(firstMatch(fields, col, POPULARITY_ALIASES)))
+                .energy(parseInt(firstMatch(fields, col, ENERGY_ALIASES)))
+                .key(firstMatch(fields, col, KEY_ALIASES))
+                .camelot(firstMatch(fields, col, CAMELOT_ALIASES))
+                .genres(firstMatch(fields, col, GENRES_ALIASES))
+                .explicit(firstMatch(fields, col, EXPLICIT_ALIASES).equalsIgnoreCase("yes")
+                       || firstMatch(fields, col, EXPLICIT_ALIASES).equalsIgnoreCase("true"))
                 .build();
     }
 
-    /** Look up a column by header name; returns "" if the column doesn't exist. */
-    private String get(List<String> fields, Map<String, Integer> col, String name) {
-        Integer idx = col.get(name);
-        if (idx == null || idx >= fields.size()) return "";
-        return fields.get(idx).trim();
+    /** Try each alias in order and return the first non-empty value. */
+    private String firstMatch(List<String> fields, Map<String, Integer> col, String[] aliases) {
+        for (String name : aliases) {
+            Integer idx = col.get(name.toLowerCase());
+            if (idx == null || idx >= fields.size()) continue;
+            String value = fields.get(idx).trim();
+            if (!value.isEmpty()) return value;
+        }
+        return "";
     }
 
     // ------------------------------------------------------------------
-    //  Minimal but correct CSV line parser.
-    //  Handles: "quoted, values", escaped quotes (""), and plain fields.
+    //  CSV line parser: handles quoted fields and escaped quotes ("")
     // ------------------------------------------------------------------
     private List<String> parseCsvLine(String line) {
         List<String> out = new ArrayList<>();
@@ -106,7 +158,6 @@ public final class CsvPlaylistSource implements PlaylistSource {
 
             if (inQuotes) {
                 if (c == '"') {
-                    // Doubled quote inside a quoted field → literal quote.
                     if (i + 1 < line.length() && line.charAt(i + 1) == '"') {
                         field.append('"');
                         i++;
@@ -136,11 +187,21 @@ public final class CsvPlaylistSource implements PlaylistSource {
         catch (NumberFormatException e) { return 0; }
     }
 
+    /** Parse "MM:SS" or "H:MM:SS" into total seconds. Returns 0 if unparseable. */
     private static int parseDuration(String s) {
-        // "03:28" -> 208 seconds
+        if (s == null || s.isBlank()) return 0;
         String[] parts = s.split(":");
-        if (parts.length != 2) return 0;
-        return parseInt(parts[0]) * 60 + parseInt(parts[1]);
+        try {
+            if (parts.length == 2) {
+                return Integer.parseInt(parts[0]) * 60 + Integer.parseInt(parts[1]);
+            }
+            if (parts.length == 3) {
+                return Integer.parseInt(parts[0]) * 3600
+                     + Integer.parseInt(parts[1]) * 60
+                     + Integer.parseInt(parts[2]);
+            }
+        } catch (NumberFormatException ignored) { }
+        return 0;
     }
 
     private static String pathName(Path p) {
