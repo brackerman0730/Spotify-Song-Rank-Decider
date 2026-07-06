@@ -25,7 +25,6 @@ import java.io.File;
 import java.nio.file.Paths;
 import java.util.List;
 
-/** Shows the finished ranking and offers to export it as CSV. */
 public final class ResultView {
 
     private final Stage    stage;
@@ -60,26 +59,28 @@ public final class ResultView {
         TableView<Row> table = new TableView<>();
         table.setItems(FXCollections.observableArrayList(toRows(ranking)));
         table.getColumns().addAll(
-                col("#",       "rank",    55),
-                col("Song",    "title",   280),
-                col("Artist",  "artist",  200),
-                col("Album",   "album",   240)
+                col("#",      "rank",   55),
+                col("Song",   "title",  280),
+                col("Artist", "artist", 200),
+                col("Album",  "album",  240)
         );
         table.setPlaceholder(new Label("No songs ranked."));
 
-        Button export = primaryButton("Export as CSV");
-        Button back   = secondaryButton("Back to start");
-        export.setOnAction(e -> exportCsv());
-        back.setOnAction  (e -> new MainView(stage).show());
+        Button export   = primaryButton("Export as CSV");
+        Button tierList = secondaryButton("Create Tier List");
+        Button back     = ghostButton("Back to start");
+        export .setOnAction(e -> exportCsv());
+        tierList.setOnAction(e -> new TierListView(stage, playlist, ranking).show());
+        back    .setOnAction(e -> new MainView(stage).show());
 
-        HBox actions = new HBox(15, export, back);
+        HBox actions = new HBox(15, export, tierList, back);
         actions.setAlignment(Pos.CENTER);
 
         VBox root = new VBox(18, header, stats, table, actions);
         root.setPadding(new Insets(30));
         VBox.setVgrow(table, Priority.ALWAYS);
 
-        Scene scene = new Scene(root, 900, 620);
+        Scene scene = new Scene(root, 900, 640);
         Theme.apply(scene);
         stage.setScene(scene);
         stage.setTitle("Rankify — Results");
@@ -122,22 +123,19 @@ public final class ResultView {
         }
     }
 
-    private Button primaryButton(String text) {
-        Button b = new Button(text);
-        b.getStyleClass().add("button-primary");
-        b.setPrefHeight(44);
-        b.setPrefWidth(180);
-        return b;
+    private Button primaryButton(String t) {
+        Button b = new Button(t); b.getStyleClass().add("button-primary");
+        b.setPrefHeight(44); b.setPrefWidth(180); return b;
     }
-    private Button secondaryButton(String text) {
-        Button b = new Button(text);
-        b.getStyleClass().add("button-secondary");
-        b.setPrefHeight(44);
-        b.setPrefWidth(180);
-        return b;
+    private Button secondaryButton(String t) {
+        Button b = new Button(t); b.getStyleClass().add("button-secondary");
+        b.setPrefHeight(44); b.setPrefWidth(180); return b;
+    }
+    private Button ghostButton(String t) {
+        Button b = new Button(t); b.getStyleClass().add("button-ghost");
+        b.setPrefHeight(44); b.setPrefWidth(180); return b;
     }
 
-    /** JavaBean row so TableView's PropertyValueFactory works cleanly. */
     public static class Row {
         private final int rank;
         private final String title, artist, album;

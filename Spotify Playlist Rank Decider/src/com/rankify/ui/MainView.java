@@ -25,7 +25,6 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.List;
 
-/** Landing screen: pick a playlist file, resume a session, or load from Spotify. */
 public final class MainView {
 
     private static final Path CRED_FILE =
@@ -44,56 +43,42 @@ public final class MainView {
 
         Button loadCsv    = primaryButton("Load playlist CSV");
         Button spotifyBtn = secondaryButton("Load from Spotify URL");
+        Button tierBtn    = secondaryButton("Skip ranking → Tier List from CSV");
         Button resumeBtn  = ghostButton("Resume saved session");
         Button credsBtn   = ghostButton("Set Spotify credentials");
 
-        loadCsv.setOnAction  (e -> chooseAndStart());
+        loadCsv   .setOnAction(e -> chooseAndStart());
         spotifyBtn.setOnAction(e -> loadFromSpotify());
-        resumeBtn.setOnAction(e -> chooseAndResume());
-        credsBtn.setOnAction (e -> promptForCredentials(true));
+        tierBtn   .setOnAction(e -> loadCsvForTierList());
+        resumeBtn .setOnAction(e -> chooseAndResume());
+        credsBtn  .setOnAction(e -> promptForCredentials(true));
 
-        for (Button b : new Button[]{loadCsv, spotifyBtn, resumeBtn, credsBtn}) {
-            b.setMaxWidth(280);
-            b.setPrefHeight(44);
+        for (Button b : new Button[]{loadCsv, spotifyBtn, tierBtn, resumeBtn, credsBtn}) {
+            b.setMaxWidth(320);
+            b.setPrefHeight(46);
         }
 
         Region spacer = new Region();
         spacer.setPrefHeight(20);
 
-        VBox root = new VBox(12, title, subtitle, spacer, loadCsv, spotifyBtn, resumeBtn, credsBtn);
+        VBox root = new VBox(12, title, subtitle, spacer,
+                             loadCsv, spotifyBtn, tierBtn, resumeBtn, credsBtn);
         root.setAlignment(Pos.CENTER);
         root.setPadding(new Insets(60));
 
-        Scene scene = new Scene(root, 560, 480);
+        Scene scene = new Scene(root, 600, 540);
         Theme.apply(scene);
-
         stage.setScene(scene);
         stage.setTitle("Rankify");
         stage.show();
     }
 
-    // ------------------------------------------------------------------
-    //  Button factories
-    // ------------------------------------------------------------------
-    private Button primaryButton(String text) {
-        Button b = new Button(text);
-        b.getStyleClass().add("button-primary");
-        return b;
-    }
-    private Button secondaryButton(String text) {
-        Button b = new Button(text);
-        b.getStyleClass().add("button-secondary");
-        return b;
-    }
-    private Button ghostButton(String text) {
-        Button b = new Button(text);
-        b.getStyleClass().add("button-ghost");
-        return b;
-    }
+    // ---- Button factories ----
+    private Button primaryButton(String t)   { Button b = new Button(t); b.getStyleClass().add("button-primary");   return b; }
+    private Button secondaryButton(String t) { Button b = new Button(t); b.getStyleClass().add("button-secondary"); return b; }
+    private Button ghostButton(String t)     { Button b = new Button(t); b.getStyleClass().add("button-ghost");     return b; }
 
-    // ------------------------------------------------------------------
-    //  Local CSV
-    // ------------------------------------------------------------------
+    // ---- Actions ----
     private void chooseAndStart() {
         File f = csvChooser("Select playlist file").showOpenDialog(stage);
         if (f == null) return;
@@ -106,9 +91,19 @@ public final class MainView {
         }
     }
 
-    // ------------------------------------------------------------------
-    //  Spotify
-    // ------------------------------------------------------------------
+    /** Skip pairwise ranking and jump straight to the tier-list UI. */
+    private void loadCsvForTierList() {
+        File f = csvChooser("Select playlist file").showOpenDialog(stage);
+        if (f == null) return;
+        try {
+            Playlist playlist = new CsvPlaylistSource().load(f.getAbsolutePath());
+            if (playlist.size() < 1) { info("Empty playlist."); return; }
+            new TierListView(stage, playlist, playlist.songs()).show();
+        } catch (Exception ex) {
+            error("Couldn't load playlist: " + ex.getMessage());
+        }
+    }
+
     private void loadFromSpotify() {
         String[] creds = loadCredentials();
         if (creds == null) {
@@ -122,8 +117,7 @@ public final class MainView {
         urlDialog.setHeaderText("Paste a Spotify playlist URL or ID");
         urlDialog.setContentText("URL:");
         urlDialog.getDialogPane().setPrefWidth(500);
-        styleDialog(urlDialog);
-
+        Theme.apply(urlDialog.getDialogPane().getScene());
         String url = urlDialog.showAndWait().orElse("").trim();
         if (url.isEmpty()) return;
 
@@ -145,7 +139,7 @@ public final class MainView {
         idDialog.setHeaderText("Enter your Spotify Client ID");
         idDialog.setContentText("Client ID:");
         idDialog.getDialogPane().setPrefWidth(500);
-        styleDialog(idDialog);
+        Theme.apply(idDialog.getDialogPane().getScene());
         String id = idDialog.showAndWait().orElse("").trim();
         if (id.isEmpty()) return null;
 
@@ -154,7 +148,7 @@ public final class MainView {
         secretDialog.setHeaderText("Enter your Spotify Client Secret");
         secretDialog.setContentText("Client Secret:");
         secretDialog.getDialogPane().setPrefWidth(500);
-        styleDialog(secretDialog);
+        Theme.apply(secretDialog.getDialogPane().getScene());
         String secret = secretDialog.showAndWait().orElse("").trim();
         if (secret.isEmpty()) return null;
 
@@ -169,9 +163,7 @@ public final class MainView {
             List<String> lines = Files.readAllLines(CRED_FILE);
             if (lines.size() < 2) return null;
             return new String[]{ lines.get(0).trim(), lines.get(1).trim() };
-        } catch (Exception e) {
-            return null;
-        }
+        } catch (Exception e) { return null; }
     }
 
     private void saveCredentials(String id, String secret) {
@@ -183,9 +175,6 @@ public final class MainView {
         }
     }
 
-    // ------------------------------------------------------------------
-    //  Resume
-    // ------------------------------------------------------------------
     private void chooseAndResume() {
         File playlistFile = csvChooser("Select the ORIGINAL playlist file").showOpenDialog(stage);
         if (playlistFile == null) return;
@@ -202,9 +191,6 @@ public final class MainView {
         }
     }
 
-    // ------------------------------------------------------------------
-    //  Helpers
-    // ------------------------------------------------------------------
     private void startRanking(Playlist playlist) {
         if (playlist.size() < 2) {
             info("Playlist needs at least two songs to rank.");
@@ -231,18 +217,14 @@ public final class MainView {
         return fc;
     }
 
-    private void styleDialog(javafx.scene.control.Dialog<?> d) {
-        Theme.apply(d.getDialogPane().getScene());
-    }
-
     private void info(String msg) {
         Alert a = new Alert(Alert.AlertType.INFORMATION, msg);
-        styleDialog(a);
+        Theme.apply(a.getDialogPane().getScene());
         a.showAndWait();
     }
     private void error(String msg) {
         Alert a = new Alert(Alert.AlertType.ERROR, msg);
-        styleDialog(a);
+        Theme.apply(a.getDialogPane().getScene());
         a.showAndWait();
     }
 }

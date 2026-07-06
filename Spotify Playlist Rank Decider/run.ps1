@@ -21,6 +21,6 @@ Write-Host ""
 Write-Host "=== Launching Rankify ===" -ForegroundColor Cyan
 & java `
     --module-path $JavaFxLib `
-    --add-modules javafx.controls `
+    --add-modules javafx.controls,java.desktop `
     -cp $OutDir `
     $MainClass
