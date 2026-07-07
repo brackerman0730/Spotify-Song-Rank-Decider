@@ -29,7 +29,7 @@ Write-Host ""
 Write-Host "=== Compiling ===" -ForegroundColor Cyan
 & javac `
     --module-path $JavaFxLib `
-    --add-modules javafx.controls `
+    --add-modules javafx.controls,javafx.media `
     -d $OutDir `
     $sources
 

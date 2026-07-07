@@ -5,9 +5,8 @@ import java.util.Objects;
 /**
  * Immutable representation of a single track.
  *
- * Only {@code id}, {@code title} and {@code artist} are required;
- * everything else is optional metadata that may be missing depending
- * on the source (CSV export, Spotify API, etc.).
+ * Required: id, title, artist. Everything else is optional metadata that
+ * may be missing depending on the source (CSV export vs. Spotify API).
  */
 public final class Song {
 
@@ -25,21 +24,31 @@ public final class Song {
     private final String genres;
     private final boolean explicit;
 
+    /** URL to an album cover image (Spotify only). Empty if unavailable. */
+    private final String imageUrl;
+
+    /** URL to a 30-second MP3 preview (Spotify only). Empty if unavailable. */
+    private final String previewUrl;
+
     private Song(Builder b) {
         this.id              = Objects.requireNonNull(b.id,     "id");
         this.title           = Objects.requireNonNull(b.title,  "title");
         this.artist          = Objects.requireNonNull(b.artist, "artist");
-        this.album           = b.album           == null ? "" : b.album;
-        this.albumDate       = b.albumDate       == null ? "" : b.albumDate;
+        this.album           = nullSafe(b.album);
+        this.albumDate       = nullSafe(b.albumDate);
         this.durationSeconds = b.durationSeconds;
         this.bpm             = b.bpm;
         this.popularity      = b.popularity;
-        this.key             = b.key     == null ? "" : b.key;
-        this.camelot         = b.camelot == null ? "" : b.camelot;
+        this.key             = nullSafe(b.key);
+        this.camelot         = nullSafe(b.camelot);
         this.energy          = b.energy;
-        this.genres          = b.genres  == null ? "" : b.genres;
+        this.genres          = nullSafe(b.genres);
         this.explicit        = b.explicit;
+        this.imageUrl        = nullSafe(b.imageUrl);
+        this.previewUrl      = nullSafe(b.previewUrl);
     }
+
+    private static String nullSafe(String s) { return s == null ? "" : s; }
 
     // ----- accessors -----
     public String  id()              { return id; }
@@ -55,6 +64,11 @@ public final class Song {
     public int     energy()          { return energy; }
     public String  genres()          { return genres; }
     public boolean explicit()        { return explicit; }
+    public String  imageUrl()        { return imageUrl; }
+    public String  previewUrl()      { return previewUrl; }
+
+    public boolean hasImage()   { return !imageUrl.isEmpty(); }
+    public boolean hasPreview() { return !previewUrl.isEmpty(); }
 
     public String formattedDuration() {
         int m = durationSeconds / 60;
@@ -62,33 +76,32 @@ public final class Song {
         return String.format("%d:%02d", m, s);
     }
 
-    @Override public boolean equals(Object o) {
-        return o instanceof Song s && s.id.equals(this.id);
-    }
+    @Override public boolean equals(Object o) { return o instanceof Song s && s.id.equals(this.id); }
     @Override public int hashCode() { return id.hashCode(); }
     @Override public String toString() { return title + " — " + artist; }
 
-    // ----- builder -----
     public static Builder builder() { return new Builder(); }
 
     public static final class Builder {
-        private String id, title, artist, album, albumDate, key, camelot, genres;
+        private String id, title, artist, album, albumDate, key, camelot, genres, imageUrl, previewUrl;
         private int durationSeconds, bpm, popularity, energy;
         private boolean explicit;
 
-        public Builder id(String v)              { this.id = v;              return this; }
-        public Builder title(String v)           { this.title = v;           return this; }
-        public Builder artist(String v)          { this.artist = v;          return this; }
-        public Builder album(String v)           { this.album = v;           return this; }
-        public Builder albumDate(String v)       { this.albumDate = v;       return this; }
-        public Builder durationSeconds(int v)    { this.durationSeconds = v; return this; }
-        public Builder bpm(int v)                { this.bpm = v;             return this; }
-        public Builder popularity(int v)         { this.popularity = v;      return this; }
-        public Builder key(String v)             { this.key = v;             return this; }
-        public Builder camelot(String v)         { this.camelot = v;         return this; }
-        public Builder energy(int v)             { this.energy = v;          return this; }
-        public Builder genres(String v)          { this.genres = v;          return this; }
-        public Builder explicit(boolean v)       { this.explicit = v;        return this; }
+        public Builder id(String v)             { this.id = v;              return this; }
+        public Builder title(String v)          { this.title = v;           return this; }
+        public Builder artist(String v)         { this.artist = v;          return this; }
+        public Builder album(String v)          { this.album = v;           return this; }
+        public Builder albumDate(String v)      { this.albumDate = v;       return this; }
+        public Builder durationSeconds(int v)   { this.durationSeconds = v; return this; }
+        public Builder bpm(int v)               { this.bpm = v;             return this; }
+        public Builder popularity(int v)        { this.popularity = v;      return this; }
+        public Builder key(String v)            { this.key = v;             return this; }
+        public Builder camelot(String v)        { this.camelot = v;         return this; }
+        public Builder energy(int v)            { this.energy = v;          return this; }
+        public Builder genres(String v)         { this.genres = v;          return this; }
+        public Builder explicit(boolean v)      { this.explicit = v;        return this; }
+        public Builder imageUrl(String v)       { this.imageUrl = v;        return this; }
+        public Builder previewUrl(String v)     { this.previewUrl = v;      return this; }
 
         public Song build() { return new Song(this); }
     }

@@ -13,9 +13,14 @@ import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.Scene;
 import javafx.scene.control.*;
+import javafx.scene.image.Image;
+import javafx.scene.image.ImageView;
 import javafx.scene.layout.*;
+import javafx.scene.media.Media;
+import javafx.scene.media.MediaPlayer;
 import javafx.stage.FileChooser;
 import javafx.stage.Stage;
+import javafx.util.Duration;
 
 import java.io.File;
 import java.nio.file.Paths;
@@ -25,6 +30,8 @@ import java.util.Optional;
 /**
  * The main comparison screen: two cards, four choices, a save button,
  * plus a togglable sidebar showing the ranker's current internal order.
+ * If the song came from the Spotify API, we also render album art and
+ * a play/pause button for the 30-second preview.
  */
 public final class ComparisonView {
 
@@ -32,25 +39,24 @@ public final class ComparisonView {
     private final Playlist playlist;
     private final AdaptiveMergeSortRanker ranker;
 
-    // ----- card labels -----
-    private final Label leftTitle   = new Label();
-    private final Label leftArtist  = new Label();
-    private final Label leftMeta    = new Label();
-    private final Label rightTitle  = new Label();
-    private final Label rightArtist = new Label();
-    private final Label rightMeta   = new Label();
+    // Card widgets — one set per side.
+    private final CardWidgets left  = new CardWidgets();
+    private final CardWidgets right = new CardWidgets();
 
-    // ----- misc UI -----
+    // Global UI bits.
     private final Label       headerLabel = new Label("Which do you prefer?");
     private final Label       stats       = new Label();
     private final ProgressBar progress    = new ProgressBar(0);
 
-    // ----- sidebar -----
-    private VBox    sidebar;
     private Button undoBtn;
-    private Button  toggleSidebarBtn;
+    private VBox   sidebar;
+    private Button toggleSidebarBtn;
     private ListView<String> rankingList;
     private final ObservableList<String> rankingItems = FXCollections.observableArrayList();
+
+    /** Media players for the two preview clips (nullable when no preview exists). */
+    private MediaPlayer leftPlayer;
+    private MediaPlayer rightPlayer;
 
     public ComparisonView(Stage stage, Playlist playlist, AdaptiveMergeSortRanker ranker) {
         this.stage    = stage;
@@ -58,21 +64,21 @@ public final class ComparisonView {
         this.ranker   = ranker;
     }
 
+    // ==================================================================
+    //  Scene assembly
+    // ==================================================================
     public void show() {
         headerLabel.getStyleClass().add("label-header");
 
-        // ---- Header row: title on the left, toggle on the right ----
         toggleSidebarBtn = ghostButton("Show current rankings ▶");
         toggleSidebarBtn.setOnAction(e -> toggleSidebar());
-
         Region headerSpacer = new Region();
         HBox.setHgrow(headerSpacer, Priority.ALWAYS);
         HBox headerRow = new HBox(15, headerLabel, headerSpacer, toggleSidebarBtn);
         headerRow.setAlignment(Pos.CENTER_LEFT);
 
-        // ---- Two comparison cards ----
-        VBox leftCard  = buildCard(leftTitle,  leftArtist,  leftMeta);
-        VBox rightCard = buildCard(rightTitle, rightArtist, rightMeta);
+        VBox leftCard  = buildCard(left);
+        VBox rightCard = buildCard(right);
         leftCard .setOnMouseClicked(e -> answer(ComparisonChoice.LEFT));
         rightCard.setOnMouseClicked(e -> answer(ComparisonChoice.RIGHT));
 
@@ -81,7 +87,7 @@ public final class ComparisonView {
         HBox.setHgrow(leftCard,  Priority.ALWAYS);
         HBox.setHgrow(rightCard, Priority.ALWAYS);
 
-        // ---- Choice buttons (fixed pref width & GridPane for perfect alignment) ----
+        // ---- Choice buttons (grid keeps them evenly sized) ----
         Button pickLeft  = primaryButton("◀ Pick Left");
         Button pickRight = primaryButton("Pick Right ▶");
         Button unknown   = secondaryButton("I don't know one of these");
@@ -113,7 +119,7 @@ public final class ComparisonView {
         buttonGrid.add(unknown,   0, 1);
         buttonGrid.add(tie,       1, 1);
 
-        // ---- Stats + save & exit row ----
+        // ---- Bottom bar ----
         stats.getStyleClass().add("label-stats");
         undoBtn = ghostButton("↶ Undo");
         undoBtn.setOnAction(e -> undoLast());
@@ -123,14 +129,12 @@ public final class ComparisonView {
         Button save = ghostButton("Save & Exit");
         save.setOnAction(e -> saveAndExit());
 
-        HBox bottom = new HBox(15, progress, undoBtn, save);    
+        HBox bottom = new HBox(15, progress, undoBtn, save);
         bottom.setAlignment(Pos.CENTER_LEFT);
         HBox.setHgrow(progress, Priority.ALWAYS);
         progress.setMaxWidth(Double.MAX_VALUE);
 
-        // ---- Center content ----
-        Region gap = new Region();
-        gap.setPrefHeight(6);
+        Region gap = new Region(); gap.setPrefHeight(6);
         VBox centerContent = new VBox(18, headerRow, cards, buttonGrid, gap, stats, bottom);
         centerContent.setAlignment(Pos.TOP_CENTER);
 
@@ -139,40 +143,86 @@ public final class ComparisonView {
         sidebar.setVisible(false);
         sidebar.setManaged(false);
 
-        // ---- Assemble ----
         BorderPane root = new BorderPane();
         root.setCenter(centerContent);
         root.setRight(sidebar);
-        BorderPane.setMargin(sidebar,       new Insets(0, 0, 0, 20));
-        BorderPane.setMargin(centerContent, new Insets(0));
+        BorderPane.setMargin(sidebar, new Insets(0, 0, 0, 20));
         root.setPadding(new Insets(30));
 
-        Scene scene = new Scene(root, 1080, 660);
+        Scene scene = new Scene(root, 1080, 720);
         Theme.apply(scene);
-        stage.setScene(scene);
-        stage.setTitle("Rankify — " + playlist.name());
 
-        // Ctrl+Z anywhere on the compare screen triggers undo.
+        // Ctrl+Z → undo.
         scene.setOnKeyPressed(e -> {
             if (e.isControlDown() && e.getCode() == javafx.scene.input.KeyCode.Z) {
                 undoLast();
             }
         });
+
+        // Make sure any playing preview stops if the user closes the window.
+        stage.setOnCloseRequest(e -> disposePlayers());
+
+        stage.setScene(scene);
+        stage.setTitle("Rankify — " + playlist.name());
+
         refresh();
     }
 
-    // ------------------------------------------------------------------
-    // Extra thingy
-    // ------------------------------------------------------------------
-    private void undoLast() {
-        if (!ranker.canUndo()) return;
-        ranker.undo();
-        refresh();
+    // ==================================================================
+    //  Card widget bundle — makes updating each side symmetric.
+    // ==================================================================
+    private static final class CardWidgets {
+        final ImageView art       = new ImageView();
+        final Label     title     = new Label();
+        final Label     artist    = new Label();
+        final Label     meta      = new Label();
+        final Button    playBtn   = new Button("▶ Play preview");
+        final StackPane artHolder = new StackPane();
     }
-    // ------------------------------------------------------------------
+
+    /** Build a full card VBox for one side. */
+    private VBox buildCard(CardWidgets w) {
+        w.title .getStyleClass().add("label-song-title");
+        w.artist.getStyleClass().add("label-song-artist");
+        w.meta  .getStyleClass().add("label-song-meta");
+        w.title.setWrapText(true);
+        w.artist.setWrapText(true);
+        w.meta.setWrapText(true);
+
+        w.art.setFitWidth(140);
+        w.art.setFitHeight(140);
+        w.art.setPreserveRatio(true);
+        w.art.setSmooth(true);
+
+        Label placeholder = new Label("♪");
+        placeholder.setStyle("-fx-font-size: 48px; -fx-text-fill: #4a4a4a;");
+        w.artHolder.getChildren().addAll(placeholder, w.art);
+        w.artHolder.setStyle("-fx-background-color: #0f0f0f; -fx-background-radius: 6;");
+        w.artHolder.setMinSize(140, 140);
+        w.artHolder.setMaxSize(140, 140);
+
+        w.playBtn.getStyleClass().add("button-secondary");
+        w.playBtn.setVisible(false);   // hidden until we know a preview exists
+        w.playBtn.setManaged(false);
+
+        VBox textCol = new VBox(6, w.title, w.artist);
+        Region spacer = new Region();
+        VBox.setVgrow(spacer, Priority.ALWAYS);
+        VBox rightCol = new VBox(8, textCol, spacer, w.playBtn, w.meta);
+        HBox.setHgrow(rightCol, Priority.ALWAYS);
+
+        HBox row = new HBox(16, w.artHolder, rightCol);
+        row.setAlignment(Pos.TOP_LEFT);
+
+        VBox card = new VBox(row);
+        card.getStyleClass().add("song-card");
+        card.setMinHeight(220);
+        return card;
+    }
+
+    // ==================================================================
     //  Sidebar
-    // ------------------------------------------------------------------
-
+    // ==================================================================
     private VBox buildSidebar() {
         Label title = new Label("CURRENT ORDER");
         title.getStyleClass().add("label-section");
@@ -205,42 +255,22 @@ public final class ComparisonView {
         rankingItems.clear();
         for (int i = 0; i < current.size(); i++) {
             Song s = current.get(i);
-            rankingItems.add(String.format("%2d.  %s — %s",
-                    i + 1, s.title(), s.artist()));
+            rankingItems.add(String.format("%2d.  %s — %s", i + 1, s.title(), s.artist()));
         }
     }
 
-    // ------------------------------------------------------------------
-    //  Card / button helpers
-    // ------------------------------------------------------------------
-    private VBox buildCard(Label title, Label artist, Label meta) {
-        title.getStyleClass().add("label-song-title");
-        title.setWrapText(true);
-        artist.getStyleClass().add("label-song-artist");
-        artist.setWrapText(true);
-        meta.getStyleClass().add("label-song-meta");
-        meta.setWrapText(true);
-
-        Region spacer = new Region();
-        VBox.setVgrow(spacer, Priority.ALWAYS);
-
-        VBox card = new VBox(6, title, artist, spacer, meta);
-        card.getStyleClass().add("song-card");
-        card.setAlignment(Pos.TOP_LEFT);
-        card.setMinHeight(200);
-        return card;
-    }
-
-    private Button primaryButton(String t)   { Button b = new Button(t); b.getStyleClass().add("button-primary");   return b; }
-    private Button secondaryButton(String t) { Button b = new Button(t); b.getStyleClass().add("button-secondary"); return b; }
-    private Button ghostButton(String t)     { Button b = new Button(t); b.getStyleClass().add("button-ghost");     return b; }
-
-    // ------------------------------------------------------------------
+    // ==================================================================
     //  Actions
-    // ------------------------------------------------------------------
+    // ==================================================================
     private void answer(ComparisonChoice choice) {
         if (ranker.nextRequest().isEmpty()) return;
         ranker.submit(choice);
+        refresh();
+    }
+
+    private void undoLast() {
+        if (!ranker.canUndo()) return;
+        ranker.undo();
         refresh();
     }
 
@@ -270,18 +300,14 @@ public final class ComparisonView {
     private void refresh() {
         Optional<ComparisonRequest> next = ranker.nextRequest();
         if (next.isEmpty()) {
+            disposePlayers();
             new ResultView(stage, playlist, ranker.finalRanking(), ranker).show();
             return;
         }
 
         ComparisonRequest req = next.get();
-        leftTitle .setText(req.left().title());
-        leftArtist.setText(req.left().artist());
-        leftMeta  .setText(buildMeta(req.left()));
-
-        rightTitle .setText(req.right().title());
-        rightArtist.setText(req.right().artist());
-        rightMeta  .setText(buildMeta(req.right()));
+        applySongToCard(req.left(),  left,  true);
+        applySongToCard(req.right(), right, false);
 
         int asked   = ranker.comparisonsAsked();
         int saved   = ranker.comparisonsSavedByInference();
@@ -290,16 +316,109 @@ public final class ComparisonView {
         stats.setText(String.format(
                 "Comparison %d   •   %d auto-resolved   •   ~%d max",
                 asked, saved, estTot));
+
         undoBtn.setDisable(!ranker.canUndo());
         undoBtn.setText(ranker.canUndo()
                 ? "↶ Undo (" + ranker.undoDepth() + ")"
                 : "↶ Undo");
+
         refreshSidebar();
     }
 
+    // ==================================================================
+    //  Song → card wiring, including artwork & preview
+    // ==================================================================
+    private void applySongToCard(Song s, CardWidgets w, boolean isLeft) {
+        w.title.setText(s.title());
+        w.artist.setText(s.artist());
+        w.meta.setText(buildMeta(s));
+
+        // ----- Artwork -----
+        if (s.hasImage()) {
+            try {
+                // backgroundLoading = true so we don't block the UI thread.
+                Image img = new Image(s.imageUrl(), 140, 140, true, true, true);
+                w.art.setImage(img);
+            } catch (Exception ex) {
+                w.art.setImage(null);
+            }
+        } else {
+            w.art.setImage(null);
+        }
+
+        // ----- Preview -----
+        MediaPlayer newPlayer = null;
+        if (s.hasPreview()) {
+            try {
+                Media media = new Media(s.previewUrl());
+                newPlayer = new MediaPlayer(media);
+                newPlayer.setVolume(0.7);
+                // Auto-stop after the clip so the button resets.
+                final MediaPlayer captured = newPlayer;
+                captured.setOnEndOfMedia(() -> {
+                    captured.stop();
+                    w.playBtn.setText("▶ Play preview");
+                });
+                w.playBtn.setVisible(true);
+                w.playBtn.setManaged(true);
+                w.playBtn.setText("▶ Play preview");
+                w.playBtn.setOnAction(e -> togglePlayback(w, isLeft));
+            } catch (Exception ex) {
+                newPlayer = null;
+                hidePlayButton(w);
+            }
+        } else {
+            hidePlayButton(w);
+        }
+
+        // Swap in the new player, disposing the old one.
+        if (isLeft) {
+            if (leftPlayer != null) leftPlayer.dispose();
+            leftPlayer = newPlayer;
+        } else {
+            if (rightPlayer != null) rightPlayer.dispose();
+            rightPlayer = newPlayer;
+        }
+    }
+
+    private void hidePlayButton(CardWidgets w) {
+        w.playBtn.setVisible(false);
+        w.playBtn.setManaged(false);
+    }
+
+    /** Toggle play/pause on one side, pausing the other side automatically. */
+    private void togglePlayback(CardWidgets w, boolean isLeft) {
+        MediaPlayer self  = isLeft ? leftPlayer  : rightPlayer;
+        MediaPlayer other = isLeft ? rightPlayer : leftPlayer;
+        CardWidgets otherW = (w == left) ? right : left;
+
+        if (self == null) return;
+        if (other != null && other.getStatus() == MediaPlayer.Status.PLAYING) {
+            other.pause();
+            otherW.playBtn.setText("▶ Play preview");
+        }
+
+        if (self.getStatus() == MediaPlayer.Status.PLAYING) {
+            self.pause();
+            w.playBtn.setText("▶ Play preview");
+        } else {
+            self.seek(Duration.ZERO);   // always restart from the top for clarity
+            self.play();
+            w.playBtn.setText("⏸ Pause");
+        }
+    }
+
+    private void disposePlayers() {
+        if (leftPlayer  != null) { leftPlayer.dispose();  leftPlayer  = null; }
+        if (rightPlayer != null) { rightPlayer.dispose(); rightPlayer = null; }
+    }
+
+    // ==================================================================
+    //  Misc helpers
+    // ==================================================================
     private String buildMeta(Song s) {
         StringBuilder sb = new StringBuilder();
-        if (!s.album().isEmpty()) sb.append(s.album()).append('\n');
+        if (!s.album().isEmpty())    sb.append(s.album()).append('\n');
         if (s.durationSeconds() > 0) sb.append(s.formattedDuration()).append("   ");
         if (s.bpm() > 0)             sb.append(s.bpm()).append(" BPM   ");
         if (!s.key().isEmpty())      sb.append(s.key()).append("   ");
@@ -308,7 +427,12 @@ public final class ComparisonView {
         return sb.toString();
     }
 
+    private Button primaryButton(String t)   { Button b = new Button(t); b.getStyleClass().add("button-primary");   return b; }
+    private Button secondaryButton(String t) { Button b = new Button(t); b.getStyleClass().add("button-secondary"); return b; }
+    private Button ghostButton(String t)     { Button b = new Button(t); b.getStyleClass().add("button-ghost");     return b; }
+
     private void saveAndExit() {
+        disposePlayers();
         FileChooser fc = new FileChooser();
         fc.setTitle("Save session");
         fc.setInitialFileName(playlist.name() + ".rkfy");
